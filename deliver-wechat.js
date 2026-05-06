@@ -2,13 +2,13 @@
 /**
  * deliver-wechat.js
  * 读取 follow-builders prepare-digest.js 的输出，
- * 调用 Google Gemini API（完全免费）生成中文摘要，
+ * 调用 GitHub Models API（无需额外注册，GitHub Actions 自动提供 Token）生成中文摘要，
  * 推送到企业微信群机器人。
  */
 
 const https = require('https');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const WECHAT_WEBHOOK_URL = process.env.WECHAT_WEBHOOK_URL;
 
 // ── 读取标准输入 ──────────────────────────────────────────────
@@ -25,9 +25,9 @@ function readStdin() {
   });
 }
 
-// ── 调用 Google Gemini API 生成中文摘要（免费）────────────────
-function callGemini(rawContent) {
-  if (!GEMINI_API_KEY) throw new Error('缺少环境变量 GEMINI_API_KEY');
+// ── 调用 GitHub Models API 生成中文摘要 ──────────────────────
+function callGitHubModels(rawContent) {
+  if (!GITHUB_TOKEN) throw new Error('缺少环境变量 GITHUB_TOKEN');
 
   const today = new Date().toLocaleDateString('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -47,33 +47,30 @@ function callGemini(rawContent) {
    > [查看原文](原文链接)  ← 如果原文有 URL 则保留，没有则省略此行
 3. 末尾固定加一行：
    ---
-   *由 Gemini + follow-builders skill 自动生成*
+   *由 GitHub Models + follow-builders skill 自动生成*
 4. 总字节数控制在 3800 字节以内（企业微信 Markdown 上限 4096 字节）。
 5. 不要加任何额外解释，直接输出 Markdown 正文。
 
 ---
 原始内容：
-${rawContent.substring(0, 12000)}`;
+${rawContent.substring(0, 8000)}`;
 
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        maxOutputTokens: 1500,
-        temperature: 0.3,
-      },
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 1500,
+      temperature: 0.3,
     });
 
-    const path =
-      `/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-
     const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      path,
+      hostname: 'models.inference.ai.azure.com',
+      path: '/chat/completions',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
+        'Authorization': `Bearer ${GITHUB_TOKEN}`,
       },
     };
 
@@ -83,14 +80,14 @@ ${rawContent.substring(0, 12000)}`;
       res.on('end', () => {
         try {
           const resp = JSON.parse(data);
-          const text = resp?.candidates?.[0]?.content?.parts?.[0]?.text;
+          const text = resp?.choices?.[0]?.message?.content;
           if (text) {
             resolve(text);
           } else {
-            reject(new Error('Gemini API 返回异常：' + data));
+            reject(new Error('GitHub Models API 返回异常：' + data));
           }
         } catch (e) {
-          reject(new Error('解析 Gemini 响应失败：' + e.message));
+          reject(new Error('解析 GitHub Models 响应失败：' + e.message));
         }
       });
     });
@@ -157,9 +154,9 @@ async function main() {
     }
 
     console.log(`📄 收到 ${rawContent.length} 个字符的原始内容`);
-    console.log('🤖 调用 Google Gemini API 生成中文摘要...');
+    console.log('🤖 调用 GitHub Models API 生成中文摘要...');
 
-    const summary = await callGemini(rawContent);
+    const summary = await callGitHubModels(rawContent);
 
     console.log('📨 推送到企业微信...');
     await sendToWechat(summary);
