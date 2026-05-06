@@ -11,6 +11,8 @@ jobs:
   send-digest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      models: read  # 允许访问 GitHub Models API
 
     steps:
       - name: Checkout 本仓库
@@ -34,7 +36,7 @@ jobs:
 
       - name: 抓取资讯并推送到企业微信
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # GitHub 自动提供，无需手动配置
           WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
         run: |
           cd follow-builders/scripts
