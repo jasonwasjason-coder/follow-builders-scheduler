@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// VERSION: GitHub Models (no external API key needed)
+// VERSION: Direct format (no AI API needed)
 
 const https = require('https');
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const WECHAT_WEBHOOK_URL = process.env.WECHAT_WEBHOOK_URL;
 
+// ── 读取标准输入 ──────────────────────────────────────────────
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';
@@ -16,74 +16,73 @@ function readStdin() {
   });
 }
 
-function callGitHubModels(rawContent) {
-  if (!GITHUB_TOKEN) throw new Error('缺少环境变量 GITHUB_TOKEN');
-
+// ── 将原始内容格式化为企业微信 Markdown ──────────────────────
+function formatForWechat(rawContent) {
   const today = new Date().toLocaleDateString('zh-CN', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
   });
 
-  const prompt = `今天是${today}。以下是从 follow-builders skill 抓取的 AI 构建者们的最新动态。
+  let body = '';
 
-请将内容整理成企业微信 Markdown 格式的中文日报，严格遵守以下规则：
-1. 第一行标题：**🤖 AI Builder 日报 | ${today}**
-2. 选取最有价值的 5～8 条资讯，每条格式：
-   **[序号]. [资讯主题]**
-   一到两句中文摘要，简洁精准。
-   > [查看原文](原文链接)
-3. 末尾固定加：
-   ---
-   *由 GitHub Models + follow-builders skill 自动生成*
-4. 总长度控制在 3800 字节以内。
-5. 直接输出正文，不要加任何额外说明。
+  // 尝试解析为 JSON
+  try {
+    const data = JSON.parse(rawContent);
+    const items = Array.isArray(data) ? data : (data.items || data.posts || data.articles || []);
 
-原始内容：
-${rawContent.substring(0, 8000)}`;
+    if (items.length > 0) {
+      const selected = items.slice(0, 8);
+      selected.forEach((item, i) => {
+        const title = item.title || item.subject || item.name || `资讯 ${i + 1}`;
+        const summary = item.summary || item.description || item.content || item.text || '';
+        const url = item.url || item.link || item.href || '';
 
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 1500,
-      temperature: 0.3,
-    });
-
-    const options = {
-      hostname: 'models.inference.ai.azure.com',
-      path: '/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body),
-        'Authorization': `Bearer ${GITHUB_TOKEN}`,
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        try {
-          const resp = JSON.parse(data);
-          const text = resp?.choices?.[0]?.message?.content;
-          if (text) {
-            resolve(text);
-          } else {
-            reject(new Error('GitHub Models 返回异常：' + data));
-          }
-        } catch (e) {
-          reject(new Error('解析响应失败：' + e.message));
+        body += `**${i + 1}. ${String(title).substring(0, 60)}**\n`;
+        if (summary) {
+          body += `${String(summary).substring(0, 120)}\n`;
         }
+        if (url) {
+          body += `> [查看原文](${url})\n`;
+        }
+        body += '\n';
       });
-    });
+    } else {
+      // JSON 但没有数组，直接截取文本
+      body = String(rawContent).substring(0, 3000);
+    }
+  } catch {
+    // 纯文本：按段落分割，取前若干段
+    const paragraphs = rawContent
+      .split(/\n{2,}/)
+      .map(p => p.trim())
+      .filter(p => p.length > 20)
+      .slice(0, 10);
 
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
+    paragraphs.forEach((p, i) => {
+      body += `**${i + 1}.** ${p.substring(0, 150)}\n\n`;
+    });
+  }
+
+  // 控制总长度（企业微信 Markdown 上限 4096 字节）
+  const header = `**🤖 AI Builder 日报 | ${today}**\n\n`;
+  const footer = `\n---\n*由 follow-builders skill 自动生成*`;
+
+  let message = header + body + footer;
+  if (Buffer.byteLength(message, 'utf8') > 3900) {
+    // 超长则截断 body
+    const maxBody = 3900 - Buffer.byteLength(header + footer, 'utf8');
+    let truncated = '';
+    for (const char of body) {
+      if (Buffer.byteLength(truncated + char, 'utf8') > maxBody) break;
+      truncated += char;
+    }
+    message = header + truncated + '\n' + footer;
+  }
+
+  return message;
 }
 
+// ── 推送到企业微信 ────────────────────────────────────────────
 function sendToWechat(markdownContent) {
   if (!WECHAT_WEBHOOK_URL) throw new Error('缺少环境变量 WECHAT_WEBHOOK_URL');
 
@@ -127,6 +126,7 @@ function sendToWechat(markdownContent) {
   });
 }
 
+// ── 主流程 ────────────────────────────────────────────────────
 async function main() {
   try {
     console.log('📥 读取 prepare-digest.js 输出...');
@@ -138,12 +138,12 @@ async function main() {
     }
 
     console.log(`📄 收到 ${rawContent.length} 个字符`);
-    console.log('🤖 调用 GitHub Models API 生成中文摘要...');
+    console.log('📝 格式化内容...');
 
-    const summary = await callGitHubModels(rawContent);
+    const message = formatForWechat(rawContent);
 
     console.log('📨 推送到企业微信...');
-    await sendToWechat(summary);
+    await sendToWechat(message);
 
     console.log('✅ 推送成功！');
   } catch (err) {
