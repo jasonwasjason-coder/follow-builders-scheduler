@@ -2,15 +2,17 @@ name: Follow Builders 企业微信日报
 
 on:
   schedule:
+    # 北京时间（CST, UTC+8）每工作日上午 9:00
+    # 对应 UTC 时间 01:00
     - cron: '0 1 * * 1-5'
-  workflow_dispatch:
+  workflow_dispatch: # 允许手动触发，方便测试
 
 jobs:
   send-digest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      models: read
+      models: read  # 允许访问 GitHub Models API
 
     steps:
       - name: Checkout 本仓库
@@ -34,7 +36,7 @@ jobs:
 
       - name: 抓取资讯并推送到企业微信
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # GitHub 自动提供，无需手动配置
           WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
         run: |
           cd follow-builders/scripts
